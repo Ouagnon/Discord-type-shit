@@ -1,0 +1,52 @@
+# ─── Environnement ───────────────────────────────────────────────
+.env
+apps/api/.env
+*.local
+
+# ─── Node / NestJS ───────────────────────────────────────────────
+node_modules/
+dist/
+coverage/
+npm-debug.log*
+.npm/
+
+# ─── Flutter / Dart ──────────────────────────────────────────────
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+.fvm/
+app.*.symbols
+app.*.map.json
+android/.gradle/
+android/key.properties
+ios/Pods/
+ios/.symlinks/
+windows/flutter/ephemeral/
+linux/flutter/ephemeral/
+macos/Flutter/ephemeral/
+
+# ─── Bases de données & sauvegardes ──────────────────────────────
+*.sqlite
+backups/
+*.sql.gz
+*.dump
+
+# ─── IDE & OS ────────────────────────────────────────────────────
+.idea/
+.vscode/*
+!.vscode/settings.json
+*.iml
+.DS_Store
+Thumbs.db
+
+# ─── Secrets & clés ──────────────────────────────────────────────
+*.pem
+*.key
+docker/livekit-secret.yaml
+docker/garage.toml
+# ─── Ressources de travail ────────────────────────────────────────
+dev ressources/
+starting ressources/
+

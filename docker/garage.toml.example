@@ -1,0 +1,38 @@
+# =============================================================================
+#  Garage — configuration S3 du projet « Discord type shit »
+#  Copie : cp docker/garage.toml.example docker/garage.toml   (dev local)
+#
+#  ⚠️ PROD : les 3 valeurs ci-dessous (rpc_secret, admin_token, metrics_token)
+#  sont des secrets de DEV partagés — remplacez-les avant la production :
+#    openssl rand -hex 32     → rpc_secret
+#    openssl rand -base64 32  → admin_token / metrics_token
+#  (scripts/setup.sh le fait automatiquement à votre place).
+#  Le fichier docker/garage.toml est exclu de git (.gitignore).
+#
+#  Doc complète : https://garagehq.deuxfleurs.fr/documentation/reference-configuration/
+#  La clé S3 et le bucket NE SE CONFIGURENT PAS ICI : ils proviennent des
+#  variables GARAGE_DEFAULT_* du docker-compose (mode --default-bucket).
+# =============================================================================
+
+metadata_dir = "/var/lib/garage/meta"      # métadonnées (SSD/NVMe de préférence)
+data_dir = "/var/lib/garage/data"          # blocs de données (gros disque)
+db_engine = "sqlite"                       # recommandé en mono-serveur
+replication_factor = 1                     # un seul nœud (mini-PC)
+rpc_bind_addr = "[::]:3901"
+rpc_public_addr = "127.0.0.1:3901"
+rpc_secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"   # ⚠️ DEV — 64 hex (32 octets) — à remplacer en prod
+
+[s3_api]
+s3_region = "garage"
+api_bind_addr = "[::]:3900"
+root_domain = ".s3.garage.local"            # vhost-style local (le path-style marche partout)
+
+[s3_web]
+bind_addr = "[::]:3902"
+root_domain = ".web.garage.local"           # servir un bucket en site web (optionnel)
+index = "index.html"
+
+[admin]
+api_bind_addr = "[::]:3903"
+admin_token = "dev_admin_token_0000000000000000"    # ⚠️ DEV
+metrics_token = "dev_metrics_token_00000000000000"  # ⚠️ DEV

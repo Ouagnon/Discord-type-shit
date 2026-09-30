@@ -1,0 +1,699 @@
+// =============================================================================
+//  SCHÉMA PRISMA — « Discord type shit »
+//  Source de vérité versionnée (ADR-0002 : code-first).
+//  Traduit fidèlement de docs/schema-bdd-optimise.sql (v2.0, 30 tables).
+//
+//  Conventions : champ camelCase ↔ colonne snake_case (@map) ;
+//  modèle PascalCase ↔ table snake_case (@@map).
+//
+//  Écarts assumés (ADR-0002) : les CHECK de plages/longueurs et les index
+//  partiels sont garantis côté application (DTO class-validator / logique
+//  transactionnelle) — TODO marqués dans le modèle concerné.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────── ENUMS ───────────────────────────
+
+enum UserStatus {
+  online
+  idle
+  dnd
+  invisible
+  offline
+
+  @@map("user_status")
+}
+
+enum FriendshipStatus {
+  pending
+  accepted
+  blocked
+
+  @@map("friendship_status")
+}
+
+enum ChannelType {
+  text
+  voice
+  dm
+  group_dm
+
+  @@map("channel_type")
+}
+
+enum GroupRole {
+  member
+  owner
+
+  @@map("group_role")
+}
+
+enum SharedItemKind {
+  emoji
+  soundboard
+
+  @@map("shared_item_kind")
+}
+
+enum ActivityType {
+  game
+  media
+  custom
+
+  @@map("activity_type")
+}
+
+enum LiveChatElementType {
+  text
+  image
+  video
+  sound
+
+  @@map("live_chat_element_type")
+}
+
+enum SanctionType {
+  warning
+  mute
+  kick
+  ban
+  temp_ban
+
+  @@map("sanction_type")
+}
+
+enum ReportStatus {
+  open
+  reviewing
+  resolved
+  dismissed
+
+  @@map("report_status")
+}
+
+// ─────────────────────────── MODÈLES ───────────────────────────
+
+/// Polices disponibles pour le pseudo / la note perso / le live-chat.
+model Font {
+  id          String   @id @default(uuid()) @map("id")
+  familyKey   String   @unique(map: "font_family_key_unique") @map("family_key")
+  displayName String   @unique(map: "font_display_name_unique") @map("display_name")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  usersCustomStatus User[]            @relation("UserCustomStatusFont")
+  usersPseudo       User[]            @relation("UserPseudoFont")
+  liveChatElements  LiveChatElement[]
+
+  @@map("font")
+}
+
+/// Compte utilisateur. email : stocker en MINUSCULES (citext du SQL de référence
+/// émulé par normalisation applicative). password_hash : Argon2id.
+/// tag Discord = (pseudo, discriminator #0000-9999).
+model User {
+  id                    String     @id @default(uuid()) @map("id")
+  email                 String     @unique(map: "user_email_unique") @map("email")
+  passwordHash          String     @map("password_hash")
+  totpSecret            String?    @map("totp_secret")
+  totpEnabled           Boolean    @default(false) @map("totp_enabled")
+  pseudo                String     @map("pseudo")
+  discriminator         Int        @map("discriminator") // 0-9999 — DTO
+  avatarUrl             String?    @map("avatar_url")
+  bannerUrl             String?    @map("banner_url")
+  profileBackgroundUrl  String?    @map("profile_background_url")
+  customStatus          String?    @map("custom_status") // ≤ 128 — DTO
+  customStatusFontId    String?    @map("custom_status_font_id")
+  pseudoFontId          String?    @map("pseudo_font_id")
+  status                UserStatus @default(offline) @map("status")
+  activityPublic        Boolean    @default(true) @map("activity_public")
+  isAdmin               Boolean    @default(false) @map("is_admin")
+  isSuspended           Boolean    @default(false) @map("is_suspended")
+  deletedAt             DateTime?  @map("deleted_at")
+  lastSeenAt            DateTime?  @map("last_seen_at")
+  createdAt             DateTime   @default(now()) @map("created_at")
+  updatedAt             DateTime   @updatedAt @map("updated_at")
+
+  customStatusFont Font? @relation("UserCustomStatusFont", fields: [customStatusFontId], references: [id], onDelete: SetNull)
+  pseudoFont       Font? @relation("UserPseudoFont", fields: [pseudoFontId], references: [id], onDelete: SetNull)
+
+  settings              UserSettings?
+  activities            Activity[]
+  ownedServers          Server[]
+  memberships           ServerMember[]
+  invitesCreated        ServerInvite[]
+  channelMemberships    ChannelMember[]
+  messagesAuthored      Message[]
+  messageReactions      MessageReaction[]
+  emojisCreated         Emoji[]
+  emojiSharesReceived   EmojiShare[]
+  soundboardsCreated    Soundboard[]
+  soundboardSharesRecv  SoundboardShare[]
+  friendshipsLo         Friendship[]    @relation("FriendshipLo")
+  friendshipsHi         Friendship[]    @relation("FriendshipHi")
+  friendshipsRequested  Friendship[]    @relation("FriendshipRequester")
+  voiceState            VoiceState?
+  liveChats             LiveChat[]
+  liveChatsSent         LiveChatSent[]  @relation("LiveChatSender")
+  liveChatsReceived     LiveChatSent[]  @relation("LiveChatReceiver")
+  reportsFiled          Report[]        @relation("ReportReporter")
+  reportsTargeted       Report[]        @relation("ReportReported")
+  reportsHandled        Report[]        @relation("ReportHandler")
+  sanctionsGiven        Sanction[]      @relation("SanctionAdmin")
+  sanctionsReceived     Sanction[]      @relation("SanctionUser")
+  auditLogs             AuditLog[]      @relation("AuditLogAdmin")
+  announcements          Announcement[]
+  systemConfigsUpdated  SystemConfig[]
+
+  @@unique([pseudo, discriminator], map: "user_tag_unique")
+  @@index([pseudo], map: "user_account_pseudo_idx")
+  // TODO (index partiel, app pour l'instant) : @@index([isAdmin]) WHERE isAdmin
+  @@map("user_account")
+}
+
+/// Réglages de l'application, par utilisateur (1-1).
+model UserSettings {
+  userId                   String  @id @map("user_id")
+  uiZoomPercent            Int     @default(100) @map("ui_zoom_percent") // 50-200 — DTO
+  fontSizePt               Int     @default(14) @map("font_size_pt") // 10-24 — DTO
+  themeMode                String  @default("dark") @map("theme_mode") // dark|light|custom — DTO
+  backgroundColor1         String? @map("background_color_1") // #RRGGBB — DTO
+  backgroundColor2         String? @map("background_color_2")
+  language                 String  @default("fr") @map("language")
+  notifyPrivate            Boolean @default(true) @map("notify_private")
+  notifyServer             Boolean @default(true) @map("notify_server")
+  notifySound              Boolean @default(true) @map("notify_sound")
+  notifyVibration          Boolean @default(true) @map("notify_vibration")
+  liveChatAccept           Boolean @default(true) @map("live_chat_accept")
+  liveChatAllowFullscreen  Boolean @default(true) @map("live_chat_allow_fullscreen")
+  liveChatCooldownSeconds  Int     @default(60) @map("live_chat_cooldown_seconds")
+  extra                    Json    @map("extra") // '{}' fourni par l'app
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_settings")
+}
+
+/// Activité affichée sur le profil / la liste (jeu en cours…).
+/// TODO (contrainte app) : une seule ligne active max par utilisateur
+/// (index partiel UNIQUE WHERE ended_at IS NULL dans le SQL de référence).
+model Activity {
+  id        String       @id @default(uuid()) @map("id")
+  userId    String       @map("user_id")
+  type      ActivityType @default(game) @map("type")
+  name      String       @map("name")
+  details   String?      @map("details")
+  startedAt DateTime     @default(now()) @map("started_at")
+  endedAt   DateTime?    @map("ended_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, startedAt(sort: Desc)], map: "activity_history_idx")
+  @@map("activity")
+}
+
+/// Serveurs. is_default = serveur général d'inscription automatique.
+/// TODO (contrainte app) : un seul serveur par défaut
+/// (index partiel UNIQUE WHERE is_default dans le SQL de référence).
+model Server {
+  id          String   @id @default(uuid()) @map("id")
+  name        String   @map("name") // 1-100 — DTO
+  iconUrl     String?  @map("icon_url")
+  ownerId     String   @map("owner_id")
+  isDefault   Boolean  @default(false) @map("is_default")
+  description String?  @map("description")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  owner      User             @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  members    ServerMember[]
+  roles      Role[]
+  invites    ServerInvite[]
+  categories ChannelCategory[]
+  channels   Channel[]
+
+  @@index([ownerId], map: "server_owner_idx")
+  @@map("server")
+}
+
+/// Adhésions aux serveurs (inscription auto au serveur par défaut).
+model ServerMember {
+  serverId  String    @map("server_id")
+  userId    String    @map("user_id")
+  nickname  String?   @map("nickname")
+  joinedAt  DateTime  @default(now()) @map("joined_at")
+
+  server      Server       @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  memberRoles MemberRole[]
+
+  @@id([serverId, userId])
+  @@index([userId], map: "server_member_user_idx")
+  @@map("server_member")
+}
+
+/// Rôles de serveur. permissions : bitfield BigInt —
+/// 1=admin, 2=salons, 4=rôles, 8=kick, 16=ban, 32=modération, 64=parler,
+/// 128=écrire, 256=gérer les emojis du serveur.
+model Role {
+  id          String   @id @default(uuid()) @map("id")
+  serverId    String   @map("server_id")
+  name        String   @map("name") // 1-50 — DTO
+  color       String?  @map("color") // #RRGGBB — DTO
+  position    Int      @default(0) @map("position")
+  permissions BigInt   @default(0) @map("permissions")
+  isDefault   Boolean  @default(false) @map("is_default")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  server      Server       @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  memberRoles MemberRole[]
+
+  @@unique([serverId, name], map: "role_server_name_unique")
+  @@index([serverId, position(sort: Desc)], map: "role_server_idx")
+  @@map("role")
+}
+
+/// Attribution des rôles (FK composite vers l'adhésion).
+model MemberRole {
+  serverId String @map("server_id")
+  userId   String @map("user_id")
+  roleId   String @map("role_id")
+
+  member ServerMember @relation(fields: [serverId, userId], references: [serverId, userId], onDelete: Cascade)
+  role   Role         @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([serverId, userId, roleId])
+  @@map("member_role")
+}
+
+/// Invitations de serveur (code court, usages limités).
+model ServerInvite {
+  code      String    @id @map("code")
+  serverId  String    @map("server_id")
+  createdBy String    @map("created_by")
+  uses      Int       @default(0) @map("uses")
+  maxUses   Int?      @map("max_uses") // TODO app : uses <= maxUses
+  expiresAt DateTime? @map("expires_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  server  Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  creator User   @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+
+  @@index([serverId], map: "server_invite_server_idx")
+  @@map("server_invite")
+}
+
+/// Catégories de salons (regroupement visuel).
+model ChannelCategory {
+  id       String @id @default(uuid()) @map("id")
+  serverId String @map("server_id")
+  name     String @map("name") // 1-50 — DTO
+  position Int    @default(0) @map("position")
+
+  server   Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  channels Channel[]
+
+  @@unique([serverId, name], map: "category_unique")
+  @@map("channel_category")
+}
+
+/// Canaux unifiés (fusion CHANNEL+CONVERSATION du schéma d'origine — ADR du
+/// SQL de référence) : text/voice = salon de serveur (serverId requis) ;
+/// dm/group_dm = conversation privée (serverId NULL, membres via ChannelMember).
+/// TODO app : CHECK (type ∈ serveur) XOR (type privé).
+model Channel {
+  id               String      @id @default(uuid()) @map("id")
+  serverId         String?     @map("server_id")
+  categoryId       String?     @map("category_id")
+  type             ChannelType @map("type")
+  name             String?     @map("name")
+  iconUrl          String?     @map("icon_url")
+  topic            String?     @map("topic")
+  position         Int         @default(0) @map("position")
+  slowmodeSeconds  Int         @default(0) @map("slowmode_seconds") // 0-21600 — DTO
+  userLimit        Int?        @map("user_limit") // 1-99 — DTO
+  lastMessageAt    DateTime?   @map("last_message_at")
+  createdAt        DateTime    @default(now()) @map("created_at")
+
+  server   Server?         @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  category ChannelCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  members  ChannelMember[]
+  messages Message[]
+  voiceStates VoiceState[]
+
+  @@index([serverId, categoryId, position], map: "channel_server_idx")
+  // TODO (index partiel) : last_message_at DESC WHERE type IN (dm, group_dm)
+  @@map("channel")
+}
+
+/// Appartenance aux canaux PRIVÉS (dm/group_dm). Les salons de serveur passent
+/// par ServerMember + permissions.
+model ChannelMember {
+  channelId          String    @map("channel_id")
+  userId             String    @map("user_id")
+  groupRole          GroupRole @default(member) @map("group_role")
+  joinedAt           DateTime  @default(now()) @map("joined_at")
+  lastReadMessageId  String?   @map("last_read_message_id") // repère de lecture (non FK)
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([channelId, userId])
+  @@index([userId], map: "channel_member_user_idx")
+  @@map("channel_member")
+}
+
+/// Messages (tous canaux). Pagination par repère (keyset) sur l'index
+/// (channelId, createdAt DESC, id DESC) : pages de 30 stables et rapides.
+model Message {
+  id        String    @id @default(uuid()) @map("id")
+  channelId String    @map("channel_id")
+  authorId  String?   @map("author_id")
+  content   String?   @map("content")
+  replyToId String?   @map("reply_to_id") // TODO app : jamais = id (self-reply)
+  createdAt DateTime  @default(now()) @map("created_at")
+  editedAt  DateTime? @map("edited_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  channel    Channel            @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  author     User?              @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  replyTo    Message?           @relation("MessageReply", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies    Message[]          @relation("MessageReply")
+  attachments MessageAttachment[]
+  reactions  MessageReaction[]
+  shares     MessageShare[]
+  reports    Report[]
+
+  @@index([channelId, createdAt(sort: Desc), id(sort: Desc)], map: "message_pagination_idx")
+  @@map("message")
+}
+
+/// Pièces jointes (US13 : 10 max par message, position 0-9 ; 50 Mo max par fichier).
+model MessageAttachment {
+  id        String   @id @default(uuid()) @map("id")
+  messageId String   @map("message_id")
+  position  Int      @map("position") // 0-9 — DTO
+  fileUrl   String   @map("file_url")
+  fileName  String   @map("file_name")
+  fileType  String   @map("file_type")
+  fileSize  BigInt   @map("file_size") // > 0 et ≤ 52 428 800 — DTO
+  width     Int?     @map("width")
+  height    Int?     @map("height")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, position], map: "message_attachment_unique")
+  @@map("message_attachment")
+}
+
+/// Réactions (US14). emoji_key : unicode ou nom d'emoji personnalisé.
+model MessageReaction {
+  messageId String   @map("message_id")
+  userId    String   @map("user_id")
+  emojiKey  String   @map("emoji_key") // 1-64 — DTO
+  createdAt DateTime @default(now()) @map("created_at")
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([messageId, userId, emojiKey])
+  @@map("message_reaction")
+}
+
+/// Emojis personnalisés (créés par un utilisateur, partageables).
+model Emoji {
+  id        String   @id @default(uuid()) @map("id")
+  creatorId String   @map("creator_id")
+  name      String   @map("name") // ^[a-z0-9_]{2,32}$ — DTO
+  imageUrl  String   @map("image_url")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  creator User         @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  shares  EmojiShare[]
+  sharedIn MessageShare[]
+
+  @@unique([creatorId, name], map: "emoji_creator_name_unique")
+  @@map("emoji")
+}
+
+/// Partage d'un emoji à un utilisateur.
+model EmojiShare {
+  emojiId   String   @map("emoji_id")
+  userId    String   @map("user_id")
+  grantedAt DateTime @default(now()) @map("granted_at")
+
+  emoji Emoji @relation(fields: [emojiId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([emojiId, userId])
+  @@index([userId], map: "emoji_share_user_idx")
+  @@map("emoji_share")
+}
+
+/// Soundboards (ex-table SOUNDBORAD, typo corrigée). volume 0.0-2.0.
+model Soundboard {
+  id         String   @id @default(uuid()) @map("id")
+  creatorId  String   @map("creator_id")
+  name       String   @map("name") // 1-50 — DTO
+  audioUrl   String   @map("audio_url")
+  volume     Float    @default(1.0) @map("volume")
+  durationMs Int?     @map("duration_ms") // > 0 — DTO
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  creator  User             @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  shares   SoundboardShare[]
+  sharedIn MessageShare[]
+
+  @@unique([creatorId, name], map: "soundboard_creator_name_unique")
+  @@map("soundboard")
+}
+
+/// Partage d'une soundboard à un utilisateur.
+model SoundboardShare {
+  soundboardId String   @map("soundboard_id")
+  userId       String   @map("user_id")
+  grantedAt    DateTime @default(now()) @map("granted_at")
+
+  soundboard Soundboard @relation(fields: [soundboardId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([soundboardId, userId])
+  @@index([userId], map: "soundboard_share_user_idx")
+  @@map("soundboard_share")
+}
+
+/// Message de partage d'un emoji/soundboard (US17 : cadre + bouton « ajouter »).
+/// TODO app : exactement un des deux (emoji_id XOR soundboard_id) selon kind.
+model MessageShare {
+  id          String         @id @default(uuid()) @map("id")
+  messageId   String         @map("message_id")
+  kind        SharedItemKind @map("kind")
+  emojiId     String?        @map("emoji_id")
+  soundboardId String?       @map("soundboard_id")
+
+  message    Message    @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  emoji      Emoji?     @relation(fields: [emojiId], references: [id], onDelete: Cascade)
+  soundboard Soundboard? @relation(fields: [soundboardId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, kind], map: "message_share_unique")
+  @@map("message_share")
+}
+
+/// Amitiés. Paire ORDONNÉE : user_lo < user_hi (TODO app : garantir l'ordre à
+/// l'insertion). TODO (index partiels) : accepted par utilisateur, pending reçus.
+model Friendship {
+  userLo         String           @map("user_lo")
+  userHi         String           @map("user_hi")
+  requesterId    String           @map("requester_id")
+  status         FriendshipStatus @default(pending) @map("status")
+  liveChatEnabled Boolean         @default(true) @map("live_chat_enabled")
+  createdAt      DateTime         @default(now()) @map("created_at")
+  respondedAt    DateTime?        @map("responded_at")
+
+  userLoUser    User @relation("FriendshipLo", fields: [userLo], references: [id], onDelete: Cascade)
+  userHiUser    User @relation("FriendshipHi", fields: [userHi], references: [id], onDelete: Cascade)
+  requester     User @relation("FriendshipRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+
+  @@id([userLo, userHi])
+  @@map("friendship")
+}
+
+/// État vocal durable. ⚠ Vérité runtime = Redis (guide ch. 7) ; cette table est
+/// la référence durable utilisée par le back-office et l'historique.
+model VoiceState {
+  userId       String   @id @map("user_id")
+  channelId    String   @map("channel_id")
+  sessionId    String   @map("session_id")
+  selfMute     Boolean  @default(false) @map("self_mute")
+  selfDeaf     Boolean  @default(false) @map("self_deaf")
+  serverMute   Boolean  @default(false) @map("server_mute")
+  camera       Boolean  @default(false) @map("camera")
+  screenShare  Boolean  @default(false) @map("screen_share")
+  joinedAt     DateTime @default(now()) @map("joined_at")
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@map("voice_state")
+}
+
+/// Live-chats (envoi d'overlays programmés à un ami — LC-01..09).
+model LiveChat {
+  id         String   @id @default(uuid()) @map("id")
+  ownerId    String   @map("owner_id")
+  name       String   @map("name") // 1-64 — DTO
+  durationMs Int      @map("duration_ms") // 1 000-300 000 — DTO
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  owner    User              @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  elements LiveChatElement[]
+  sends    LiveChatSent[]
+
+  @@index([ownerId], map: "live_chat_owner_idx")
+  @@map("live_chat")
+}
+
+/// Éléments d'un live-chat. x/y/width/height en coordonnées RELATIVES (0-1) :
+/// le rendu s'adapte à toutes les résolutions.
+/// TODO app : type 'text' → textContent requis ; sinon assetUrl requis.
+model LiveChatElement {
+  id              String             @id @default(uuid()) @map("id")
+  liveChatId      String             @map("live_chat_id")
+  type            LiveChatElementType @map("type")
+  textContent     String?            @map("text_content")
+  fontId          String?            @map("font_id")
+  fontSizePt      Int?               @map("font_size_pt") // 8-72 — DTO
+  assetUrl        String?            @map("asset_url")
+  assetDurationMs Int?               @map("asset_duration_ms")
+  x               Float              @map("x") // 0.0-1.0 — DTO
+  y               Float              @map("y")
+  width           Float?             @map("width")
+  height          Float?             @map("height")
+  startTimeMs     Int                @default(0) @map("start_time_ms")
+  sortOrder       Int                @default(0) @map("sort_order")
+
+  liveChat LiveChat @relation(fields: [liveChatId], references: [id], onDelete: Cascade)
+  font     Font?    @relation(fields: [fontId], references: [id], onDelete: SetNull)
+
+  @@index([liveChatId, sortOrder], map: "live_chat_element_live_chat_idx")
+  @@map("live_chat_element")
+}
+
+/// Historique d'envoi des live-chats (contrôle du cooldown côté destinataire).
+model LiveChatSent {
+  id          String    @id @default(uuid()) @map("id")
+  liveChatId  String    @map("live_chat_id")
+  senderId    String    @map("sender_id")
+  receiverId  String    @map("receiver_id")
+  sentAt      DateTime  @default(now()) @map("sent_at")
+  deliveredAt DateTime? @map("delivered_at")
+  viewedAt    DateTime? @map("viewed_at")
+
+  liveChat LiveChat @relation(fields: [liveChatId], references: [id], onDelete: Cascade)
+  sender   User     @relation("LiveChatSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver User     @relation("LiveChatReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@index([receiverId, sentAt(sort: Desc)], map: "live_chat_sent_receiver_idx")
+  @@map("live_chat_sent")
+}
+
+/// Signalements (file de modération MOD-01..05). evidenceSnapshot conserve une
+/// copie du contenu au moment du signalement (le message pouvant être purgé).
+model Report {
+  id              String       @id @default(uuid()) @map("id")
+  reporterId      String       @map("reporter_id")
+  reportedUserId  String       @map("reported_user_id")
+  messageId       String?      @map("message_id")
+  evidenceSnapshot Json?        @map("evidence_snapshot")
+  reason          String       @map("reason") // 1-1000 — DTO
+  status          ReportStatus @default(open) @map("status")
+  handledById     String?      @map("handled_by_id")
+  resolutionNote  String?      @map("resolution_note")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  reporter    User     @relation("ReportReporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  reportedUser User    @relation("ReportReported", fields: [reportedUserId], references: [id], onDelete: Cascade)
+  message     Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  handledBy   User?    @relation("ReportHandler", fields: [handledById], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt], map: "report_queue_idx")
+  @@index([reportedUserId, createdAt(sort: Desc)], map: "report_reported_idx")
+  @@map("report")
+}
+
+/// Sanctions. mute/temp_ban → expiresAt obligatoire (TODO app).
+/// Écart Prisma : adminId optionnel (SQL : NOT NULL + ON DELETE SET NULL,
+/// incompatible Prisma) — le concept « sanction orpheline » reste identique.
+model Sanction {
+  id        String       @id @default(uuid()) @map("id")
+  adminId   String?      @map("admin_id")
+  userId    String       @map("user_id")
+  type      SanctionType @map("type")
+  reason    String       @map("reason") // 1-1000 — DTO
+  expiresAt DateTime?    @map("expires_at")
+  createdAt DateTime     @default(now()) @map("created_at")
+
+  admin User? @relation("SanctionAdmin", fields: [adminId], references: [id], onDelete: SetNull)
+  user  User  @relation("SanctionUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)], map: "sanction_user_idx")
+  @@map("sanction")
+}
+
+/// Journal d'audit du back-office (ajout seul — jamais de mise à jour/suppression).
+/// ip_address : type inet en SQL → String ici (validation DTO côté app).
+model AuditLog {
+  id         String   @id @default(uuid()) @map("id")
+  adminId    String?  @map("admin_id") // NULL = action système
+  action     String   @map("action") // ex : 'user.delete', 'config.update'
+  targetType String?  @map("target_type")
+  targetId   String?  @map("target_id")
+  details    Json     @map("details") // '{}' fourni par l'app
+  ipAddress  String?  @map("ip_address")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  admin User? @relation("AuditLogAdmin", fields: [adminId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt(sort: Desc)], map: "audit_log_created_idx")
+  @@index([adminId, createdAt(sort: Desc)], map: "audit_log_admin_idx")
+  @@index([targetType, targetId], map: "audit_log_target_idx")
+  @@map("audit_log")
+}
+
+/// Annonces globales (CSR/CFG). authorId optionnel (écart Prisma, cf. Sanction).
+model Announcement {
+  id          String    @id @default(uuid()) @map("id")
+  authorId    String?   @map("author_id")
+  title       String    @map("title") // 1-128 — DTO
+  body        String    @map("body")
+  publishedAt DateTime  @default(now()) @map("published_at")
+  expiresAt   DateTime? @map("expires_at")
+
+  author User? @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([publishedAt(sort: Desc)], map: "announcement_published_idx")
+  @@map("announcement")
+}
+
+/// Configuration système / feature flags (CFG-01..06).
+model SystemConfig {
+  key         String   @id @map("key") // ex : 'maintenance_mode'
+  value       Json     @map("value")
+  description String?  @map("description")
+  updatedById String?  @map("updated_by_id")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  updatedBy User? @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@map("system_config")
+}

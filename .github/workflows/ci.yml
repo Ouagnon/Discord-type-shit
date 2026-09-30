@@ -1,0 +1,77 @@
+# =============================================================================
+#  CI « Discord type shit » (GitHub Actions — gratuit pour un dépôt public)
+#  guide ch. 14 : analyse statique + tests + migrations rejouées sur base
+#  éphémère + builds. Fusion interdite si rouge.
+# =============================================================================
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  api:
+    name: API (NestJS + Prisma)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: dts
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: dts_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U dts"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://dts:ci@localhost:5432/dts_test?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/api/package-lock.json
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npx prisma migrate deploy        # rejoue toutes les migrations = vérification vivante
+      - run: npm run lint
+      - run: npm test -- --coverage
+      - run: npm run build
+
+  app:
+    name: App Flutter
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+
+  admin:
+    name: Admin Flutter Web
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/admin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze

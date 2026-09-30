@@ -1,0 +1,55 @@
+# =============================================================================
+#  Caddy — passerelle HTTPS unique de production
+#  Certificats Let's Encrypt automatiques (renouvellement inclus).
+#  Variables ${DOMAIN} / ${ACME_EMAIL} viennent du .env du compose.
+#  Rappel : sur la box, rediriger 80+443 TCP vers le mini-PC.
+# =============================================================================
+
+{
+        email {$ACME_EMAIL}
+}
+
+# API REST + WebSocket (temps réel) — jetons LiveKit délivrés ici
+api.{$DOMAIN} {
+        reverse_proxy api:3000
+}
+
+# Back-office (build Flutter Web statique servi par Caddy)
+# ─────────────────────────────────────────────────────────────────────────────
+# DÉCISION ADR-0003 : accès LOCAL UNIQUEMENT — jamais exposé sur Internet.
+# Le port 8080 est publié en 127.0.0.1:8080 sur l'hôte (docker-compose.prod.yml),
+# donc joignable uniquement :
+#   1) depuis le serveur lui-même (navigateur local, ou session bureau à distance) ;
+#   2) à distance via une connexion directe au serveur (tunnel SSH) :
+#        ssh -L 8080:localhost:8080 utilisateur@mon-serveur
+#        puis ouvrir http://localhost:8080 dans le navigateur de votre PC.
+# Pas de TLS ici : la liaison est locale, et le tunnel SSH chiffre le cas échéant.
+# L'authentification applicative reste de mise (connexion dédiée + A2F + is_admin),
+# et les routes BO de l'API (api.{$DOMAIN}) sont protégées par le contrôle is_admin.
+# Prévoir CORS_ORIGINS=http://localhost:8080 dans le .env pour les appels API.
+# ─────────────────────────────────────────────────────────────────────────────
+:8080 {
+        root * /srv/bo
+        encode zstd gzip
+        try_files {path} /index.html
+        file_server
+}
+
+# Application web (landing / téléchargement des clients — optionnel)
+app.{$DOMAIN} {
+        root * /srv/app
+        encode zstd gzip
+        try_files {path} /index.html
+        file_server
+}
+
+# Fichiers : URLs présignées Garage S3 (avatars, pièces jointes, médias)
+# Caddy préserve le Host par défaut → les signatures SigV4 restent valides.
+files.{$DOMAIN} {
+        reverse_proxy garage:3900
+}
+
+# Signalisation vocale LiveKit (WebSocket sécurisé)
+vocal.{$DOMAIN} {
+        reverse_proxy livekit:7880
+}

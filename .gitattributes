@@ -1,0 +1,30 @@
+# ─── Gestion des fins de ligne (LF / CRLF) ────────────────────────
+# Force LF dans le dépôt et dans la copie de travail pour la cohérence
+* text=auto eol=lf
+
+# Les scripts Shell doivent TOUJOURS avoir des fins de ligne LF (Docker / Linux)
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Les scripts batch Windows peuvent utiliser CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# PowerShell fonctionne très bien en LF ou CRLF
+*.ps1 text eol=lf
+
+# ─── Fichiers binaires (ne pas modifier les fins de ligne) ────────
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.exe binary
+*.dat binary
+*.suo binary
+*.lib binary
+*.pdb binary

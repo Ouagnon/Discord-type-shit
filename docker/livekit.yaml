@@ -1,0 +1,26 @@
+# =============================================================================
+#  LiveKit — serveur SFU (voix / caméra / partage d'écran)
+#  Doc complète : https://docs.livekit.io/server/config/
+#
+#  ⚠ AVANT LA MISE EN SERVICE :
+#  1. Générer une vraie clé : docker exec -it dts-livekit livekit-server generate-keys
+#     → reporter API key/secret dans .env (LIVEKIT_API_KEY / LIVEKIT_API_SECRET)
+#  2. use_external_ip: true suppose que PUBLIC_IP est l'adresse vue d'Internet
+#     (correct chez soi avec IP publique ; voir guide ch. 16, section CGNAT).
+# =============================================================================
+
+port: 7880                    # signalisation (proxifiée par Caddy en wss://)
+bind_addresses:
+  - ""
+
+rtc:
+  tcp_port: 7881              # repli TCP (media over TCP)
+  port_range_start: 50000     # plage UDP publiée dans docker-compose.prod.yml
+  port_range_end: 60000
+  use_external_ip: true
+
+redis: {}                     # mono-nœud : pas besoin ; retirer si ajouté plus tard
+
+keys:
+  # Clé de DEV — À REMPLACER en production (voir en-tête)
+  devkey: devsecret_CHANGE_ME_000000000000000000000000
